@@ -40,6 +40,59 @@ Public Class ChatController
             End Try
         End Using
     End Function
+    ' ChatController.vb
+
+    ' ... your existing SendMessage function is here ...
+
+    ' =========================================================================
+    ' === PASTE THE NEW FUNCTION HERE  (Inside the ChatController class) ===
+    ' =========================================================================
+    <HttpGet>
+    <Route("api/chat/history/{sessionId}")>
+    Public Function GetHistory(ByVal sessionId As String) As IHttpActionResult
+        Dim messages As New List(Of Object)()
+        Dim conversationId As Integer = 0
+
+        Try
+            ' Step 1: Find the ConversationId for the given SessionId from the database
+            Using conn As New SqlConnection(ConfigurationManager.ConnectionStrings("DefaultConnection").ConnectionString)
+                conn.Open()
+                Dim cmd As New SqlCommand("SELECT Id FROM Conversations WHERE SessionId = @SessionId", conn)
+                cmd.Parameters.AddWithValue("@SessionId", sessionId)
+                Dim result = cmd.ExecuteScalar()
+                If result IsNot Nothing AndAlso result IsNot DBNull.Value Then
+                    conversationId = CInt(result)
+                Else
+                    ' If no history exists for this session, return an empty list. This is normal for a new user.
+                    Return Ok(messages)
+                End If
+            End Using
+
+            ' Step 2: If we found a conversation, get all of its messages in the correct order
+            If conversationId > 0 Then
+                Using conn As New SqlConnection(ConfigurationManager.ConnectionStrings("DefaultConnection").ConnectionString)
+                    conn.Open()
+                    Dim cmd As New SqlCommand("SELECT Sender, Content FROM Messages WHERE ConversationId = @ConversationId ORDER BY Id ASC", conn)
+                    cmd.Parameters.AddWithValue("@ConversationId", conversationId)
+                    Using reader As SqlDataReader = cmd.ExecuteReader()
+                        While reader.Read()
+                            messages.Add(New With {
+                                .sender = reader("Sender").ToString(),
+                                .text = reader("Content").ToString()
+                            })
+                        End While
+                    End Using
+                End Using
+            End If
+
+            Return Ok(messages)
+
+        Catch ex As Exception
+            ' If there's any database error, send a server error response to the browser
+            Return InternalServerError(ex)
+        End Try
+    End Function
+    ' ... your helper classes (GeminiResponse, etc.) are here ...
 
     Public Class GeminiResponse
         Public Property candidates As List(Of Candidate)
