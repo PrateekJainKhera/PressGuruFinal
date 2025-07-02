@@ -7,32 +7,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PressGuru AI</title>
     
-    <!-- NEW: Importing a professional font from Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
 
     <style>
-        /* =========================================== */
-        /* ===         NEW PROFESSIONAL UI         === */
-        /* =========================================== */
-
         :root {
-            --bg-dark-primary: #202123;      /* Sidebar background */
-            --bg-dark-secondary: #343541;   /* Main chat background */
+            --bg-dark-primary: #202123;
+            --bg-dark-secondary: #343541;
             --text-primary: #ffffff;
-            --text-secondary: #d1d5db;      /* Lighter text for details */
+            --text-secondary: #d1d5db;
             --border-color: rgba(255, 255, 255, 0.2);
             --accent-blue: #3b82f6;
             --user-bubble: #3b82f6;
             --bot-bubble: #444654;
+            --accent-purple: #8b5cf6; /* For TTS button */
         }
-
-        /* --- GENERAL & TYPOGRAPHY --- */
         html, body {
             height: 100%;
             margin: 0;
-            overflow: hidden; /* Prevent body scrollbars */
+            overflow: hidden;
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         }
         body {
@@ -40,23 +34,10 @@
             display: flex;
             color: var(--text-primary);
         }
-
-        /* --- CUSTOM SCROLLBAR --- */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: rgba(0,0,0,0.1);
-        }
-        ::-webkit-scrollbar-thumb {
-            background-color: #555;
-            border-radius: 4px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background-color: #666;
-        }
-
-        /* --- SIDEBAR --- */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+        ::-webkit-scrollbar-thumb { background-color: #555; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background-color: #666; }
         .sidebar {
             width: 260px;
             background-color: var(--bg-dark-primary);
@@ -97,8 +78,6 @@
         }
         .history-list li:hover { background-color: var(--bg-dark-secondary); }
         .history-list li.active { background-color: var(--accent-blue); font-weight: 500; }
-
-        /* --- MAIN CONTENT & CHAT CONTAINER --- */
         .main-content {
             flex-grow: 1;
             display: flex;
@@ -121,8 +100,6 @@
             display: flex;
             flex-direction: column;
         }
-
-        /* --- WELCOME SCREEN --- */
         .welcome-screen {
             flex-grow: 1;
             display: flex;
@@ -138,8 +115,6 @@
             font-weight: 700;
             color: var(--text-primary);
         }
-        
-        /* --- CHAT BUBBLES & AVATARS --- */
         .message-wrapper {
             display: flex;
             align-items: flex-start;
@@ -186,8 +161,6 @@
         }
         .message-wrapper:hover .copy-btn { opacity: 0.7; }
         .copy-btn:hover { opacity: 1; }
-
-        /* --- INPUT AREA --- */
         .input-area-wrapper {
             padding: 20px 0;
             background: var(--bg-dark-secondary);
@@ -213,7 +186,7 @@
             font-size: 16px;
             padding: 10px;
         }
-        #sendButton, #voiceButton, #analyzeButton, #uploadButton {
+        #sendButton, #voiceButton, #analyzeButton, #uploadButton, #ttsButton {
             border: none;
             background-color: transparent;
             color: var(--text-secondary);
@@ -228,7 +201,10 @@
             flex-shrink: 0;
             transition: background-color 0.2s, color 0.2s;
         }
-        #sendButton:hover, #voiceButton:hover, #analyzeButton:hover, #uploadButton:hover {
+        #ttsButton.active {
+            color: var(--accent-purple);
+        }
+        #sendButton:hover, #voiceButton:hover, #analyzeButton:hover, #uploadButton:hover, #ttsButton:hover {
             background-color: rgba(255, 255, 255, 0.1);
             color: var(--text-primary);
         }
@@ -258,7 +234,8 @@
                     <input type="file" id="imageUploadInput" accept="image/*" style="display: none;" />
                     <input type="text" id="userInput" placeholder="Ask PressGuru..." autocomplete="off" />
                     <button type="button" id="sendButton" title="Send">➤</button>
-                    <button type="button" id="voiceButton" title="Use Voice">🎙️</button>
+                    <button type="button" id="ttsButton" title="Enable Voice Output">🔇</button>
+                    <button type="button" id="voiceButton" title="Use Voice Input">🎙️</button>
                     <button type="button" id="analyzeButton" title="Analyze Personality">👤</button> 
                 </div>
             </div>
@@ -276,11 +253,45 @@
                 const historyList = document.getElementById("historyList");
                 const newChatButton = document.getElementById("newChatButton");
                 const welcomeScreen = document.getElementById("welcomeScreen");
+                const ttsButton = document.getElementById("ttsButton");
 
                 let userGuid = localStorage.getItem("pressGuruUserGuid") || crypto.randomUUID();
                 localStorage.setItem("pressGuruUserGuid", userGuid);
                 let currentSessionId = sessionStorage.getItem("pressGuruCurrentSessionId") || crypto.randomUUID();
                 sessionStorage.setItem("pressGuruCurrentSessionId", currentSessionId);
+                let isTtsEnabled = localStorage.getItem('pressGuruTtsEnabled') === 'true';
+                const synth = window.speechSynthesis;
+
+                function speakText(textToSpeak) {
+                    if (!isTtsEnabled || !textToSpeak || !synth) return;
+                    synth.cancel();
+                    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+                    utterance.onerror = function (event) {
+                        console.error('SpeechSynthesisUtterance.onerror', event);
+                    };
+                    synth.speak(utterance);
+                }
+
+                function updateTtsButtonState() {
+                    if (isTtsEnabled) {
+                        ttsButton.innerHTML = '🔊';
+                        ttsButton.classList.add('active');
+                        ttsButton.title = 'Disable Voice Output';
+                    } else {
+                        ttsButton.innerHTML = '🔇';
+                        ttsButton.classList.remove('active');
+                        ttsButton.title = 'Enable Voice Output';
+                    }
+                }
+
+                function toggleTts() {
+                    isTtsEnabled = !isTtsEnabled;
+                    localStorage.setItem('pressGuruTtsEnabled', isTtsEnabled);
+                    updateTtsButtonState();
+                    if (!isTtsEnabled) {
+                        synth.cancel();
+                    }
+                }
 
                 async function handleError(response, messageWrapper) {
                     let errorMessage = `An error has occurred (Status: ${response.status}).`;
@@ -327,7 +338,6 @@
                     const p = document.createElement("p");
                     p.innerHTML = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
                     messageDiv.appendChild(p);
-
                     if (sender.toLowerCase() === 'bot' && !text) {
                         const spinner = document.createElement('div');
                         spinner.className = 'spinner';
@@ -341,7 +351,6 @@
                         img.className = 'thumbnail';
                         messageDiv.appendChild(img);
                     }
-
                     wrapper.appendChild(avatar);
                     wrapper.appendChild(messageDiv);
                     chatBox.appendChild(wrapper);
@@ -371,6 +380,7 @@
                 }
 
                 function handleSidebarClick(event) {
+                    synth.cancel();
                     const newSessionId = event.target.dataset.sessionId;
                     if (newSessionId && newSessionId !== currentSessionId) {
                         currentSessionId = newSessionId;
@@ -392,7 +402,9 @@
                             welcomeScreen.style.display = 'none';
                             history.forEach(msg => addMessageToChatBox(msg.sender, msg.text));
                         } else {
-                            addMessageToChatBox("Bot", "Hello! I am PressGuru. How can I help you?");
+                            const initialGreeting = "Hello! I am PressGuru. How can I help you?";
+                            addMessageToChatBox("Bot", initialGreeting);
+                            speakText(initialGreeting);
                         }
                     } catch (error) {
                         welcomeScreen.style.display = 'none';
@@ -418,6 +430,7 @@
                         const p = thinkingMessageDiv.querySelector("p");
                         p.innerHTML = data.response.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
                         addCopyButton(thinkingMessageDiv);
+                        speakText(p.innerText);
                         loadSidebar();
                     } catch (error) {
                         const p = thinkingMessageDiv.querySelector("p");
@@ -436,8 +449,10 @@
                         if (!response.ok) { return await handleError(response, thinkingMessageDiv); }
                         const data = await response.json();
                         const p = thinkingMessageDiv.querySelector("p");
-                        p.innerHTML = `<strong>Personality Analysis:</strong><br>${data.response.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>')}`;
+                        const analysisText = `Personality Analysis: ${data.response}`;
+                        p.innerHTML = analysisText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
                         addCopyButton(thinkingMessageDiv);
+                        speakText(p.innerText);
                     } catch (error) {
                         const p = thinkingMessageDiv.querySelector("p");
                         p.innerText = `Analysis failed: ${error.message}`;
@@ -464,6 +479,7 @@
                         const p = thinkingMessageDiv.querySelector("p");
                         p.innerHTML = data.response.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
                         addCopyButton(thinkingMessageDiv);
+                        speakText(p.innerText);
                         loadSidebar();
                     } catch (error) {
                         const p = thinkingMessageDiv.querySelector("p");
@@ -474,13 +490,17 @@
                 }
 
                 newChatButton.addEventListener("click", () => {
+                    synth.cancel();
                     currentSessionId = crypto.randomUUID();
                     sessionStorage.setItem("pressGuruCurrentSessionId", currentSessionId);
                     chatBox.innerHTML = '';
                     loadSidebar();
-                    addMessageToChatBox("Bot", "Hello! I am PressGuru. How can I help you?");
+                    const initialGreeting = "Hello! I am PressGuru. How can I help you?";
+                    addMessageToChatBox("Bot", initialGreeting);
+                    speakText(initialGreeting);
                 });
 
+                ttsButton.addEventListener('click', toggleTts);
                 sendButton.addEventListener("click", handleSendMessage);
                 analyzeButton.addEventListener("click", handleAnalysis);
                 userInput.addEventListener("keypress", e => { if (e.key === 'Enter') handleSendMessage(); });
@@ -502,6 +522,7 @@
                 }
 
                 async function initializeApp() {
+                    updateTtsButtonState();
                     await loadSidebar();
                     await loadHistory(currentSessionId);
                 }

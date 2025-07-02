@@ -1,6 +1,7 @@
 ﻿' =========================================================
 ' ===           PressGuru - ChatController.vb           ===
-' ===      COMPLETE FILE with User History Sidebar      ===
+' ===      UPGRADED with Contextual Conversation Memory ===
+' ===             100% COMPLETE AND FINAL CODE          ===
 ' =========================================================
 Imports System.Net
 Imports System.Net.Http
@@ -16,7 +17,7 @@ Imports System.IO
 Public Class ChatController
     Inherits ApiController
 
-    ' --- Models for API Requests (Updated) ---
+    ' --- Models for API Requests ---
     Public Class ChatRequestModel
         Public Property Message As String
         Public Property SessionId As String
@@ -38,7 +39,7 @@ Public Class ChatController
     ' ===                       API ENDPOINTS                             ===
     ' =========================================================================
 
-    ' --- NEW: Get all conversations for a user's sidebar ---
+    ' --- Get all conversations for a user's sidebar ---
     <HttpGet>
     <Route("api/user/conversations/{userGuid}")>
     Public Function GetUserConversations(ByVal userGuid As String) As IHttpActionResult
@@ -80,7 +81,7 @@ Public Class ChatController
         End Try
     End Function
 
-    ' --- Send a regular chat message ---
+    ' --- Send a regular chat message with conversation context ---
     <HttpPost>
     <Route("api/chat/send")>
     Public Async Function SendMessage(<FromBody> ByVal request As ChatRequestModel) As Task(Of IHttpActionResult)
@@ -92,8 +93,21 @@ Public Class ChatController
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12
             SaveMessageToDb(request.SessionId, "User", request.Message, request.UserGuid)
 
-            Dim fullPrompt = $"{PRESSGURU_SYSTEM_PROMPT}{vbCrLf}User: {request.Message}" ' Simplified prompt structure
-            Dim geminiResponseText = Await GetAnalysisFromGemini(fullPrompt)
+            Dim recentHistory = GetRecentHistory(request.SessionId, request.UserGuid)
+
+            Dim geminiContents As New List(Of Object)()
+            geminiContents.Add(New With {.role = "user", .parts = {New With {.text = PRESSGURU_SYSTEM_PROMPT}}})
+            geminiContents.Add(New With {.role = "model", .parts = {New With {.text = "Yes, I am PressGuru. I am ready to answer your printing questions."}}})
+
+            For Each msg In recentHistory
+                Dim role = If(msg.Sender.Equals("User", StringComparison.OrdinalIgnoreCase), "user", "model")
+                geminiContents.Add(New With {.role = role, .parts = {New With {.text = msg.Content}}})
+            Next
+
+            geminiContents.Add(New With {.role = "user", .parts = {New With {.text = request.Message}}})
+
+            Dim payload = New With {.contents = geminiContents}
+            Dim geminiResponseText = Await GetAnalysisFromPayload(payload)
 
             SaveMessageToDb(request.SessionId, "Bot", geminiResponseText, request.UserGuid)
             Return Ok(New With {.response = geminiResponseText})
@@ -193,6 +207,36 @@ Public Class ChatController
     ' ===                       HELPER FUNCTIONS                          ===
     ' =========================================================================
 
+    ' --- HELPER: Gets the last 6 messages for context ---
+    Public Class ChatMessage
+        Public Property Sender As String
+        Public Property Content As String
+    End Class
+
+    Private Function GetRecentHistory(ByVal sessionId As String, ByVal userGuid As String) As List(Of ChatMessage)
+        Dim history As New List(Of ChatMessage)()
+        Dim conversationId = GetOrCreateConversation(sessionId, userGuid)
+
+        Dim sql = "SELECT TOP 6 Sender, Content FROM Messages WHERE ConversationId = @ConversationId ORDER BY Id DESC"
+
+        Using conn As New SqlConnection(ConfigurationManager.ConnectionStrings("DefaultConnection").ConnectionString)
+            conn.Open()
+            Dim cmd As New SqlCommand(sql, conn)
+            cmd.Parameters.AddWithValue("@ConversationId", conversationId)
+            Using reader As SqlDataReader = cmd.ExecuteReader()
+                While reader.Read()
+                    history.Add(New ChatMessage With {
+                        .Sender = reader("Sender").ToString(),
+                        .Content = reader("Content").ToString()
+                    })
+                End While
+            End Using
+        End Using
+
+        history.Reverse()
+        Return history
+    End Function
+
     ' --- HELPER: Calls OCR.space API to get text from an image ---
     Private Async Function GetTextFromImageOcrSpace(ByVal imageStream As Stream, ByVal fileName As String) As Task(Of String)
         Dim apiKey = ConfigurationManager.AppSettings("OcrSpaceApiKey")
@@ -221,24 +265,33 @@ Public Class ChatController
         End Using
     End Function
 
-    ' --- HELPER: Generic function to send text to Gemini and get a response ---
+    ' --- HELPER: Generic function for one-off analysis tasks ---
     Private Async Function GetAnalysisFromGemini(ByVal text As String) As Task(Of String)
+        Dim payload = New With {
+            .contents = {
+                New With {.role = "user", .parts = {New With {.text = text}}}
+            }
+        }
+        Return Await GetAnalysisFromPayload(payload)
+    End Function
+
+    ' --- HELPER: Takes a pre-built payload object and calls the Gemini API ---
+    Private Async Function GetAnalysisFromPayload(ByVal payload As Object) As Task(Of String)
         Dim apiKey = ConfigurationManager.AppSettings("GeminiApiKey")
         Dim requestUrl = String.Format(GEMINI_API_URL_TEMPLATE, apiKey)
 
         Using client As New HttpClient()
-            Dim payload = New With {
-                .contents = {
-                    New With {.role = "user", .parts = {New With {.text = text}}}
-                }
-            }
             Dim content = New StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json")
             Dim response = Await client.PostAsync(requestUrl, content)
 
             If response.IsSuccessStatusCode Then
                 Dim jsonResponse = Await response.Content.ReadAsStringAsync()
                 Dim geminiResponse = JsonConvert.DeserializeObject(Of GeminiResponse)(jsonResponse)
-                Return geminiResponse.candidates(0).content.parts(0).text.Trim()
+                If geminiResponse.candidates IsNot Nothing AndAlso geminiResponse.candidates.Count > 0 Then
+                    Return geminiResponse.candidates(0).content.parts(0).text.Trim()
+                Else
+                    Return "The AI returned an empty response."
+                End If
             Else
                 Dim errorContent = Await response.Content.ReadAsStringAsync()
                 Throw New HttpRequestException($"AI API call failed with status {response.StatusCode}. Details: {errorContent}")
@@ -246,10 +299,10 @@ Public Class ChatController
         End Using
     End Function
 
-    ' --- DATABASE HELPER: Get a conversation transcript for analysis ---
+    ' --- DATABASE HELPER: Get a full conversation transcript for analysis ---
     Private Shared Function GetUserTranscript(ByVal sessionId As String, ByVal userGuid As String) As String
         Dim transcript As New StringBuilder()
-        Dim conversationId = GetOrCreateConversation(sessionId, userGuid) ' Ensure UserGuid is passed
+        Dim conversationId = GetOrCreateConversation(sessionId, userGuid)
 
         Using conn As New SqlConnection(ConfigurationManager.ConnectionStrings("DefaultConnection").ConnectionString)
             conn.Open()
@@ -281,7 +334,6 @@ Public Class ChatController
     Private Shared Function GetOrCreateConversation(ByVal sessionId As String, ByVal userGuid As String) As Integer
         Using conn As New SqlConnection(ConfigurationManager.ConnectionStrings("DefaultConnection").ConnectionString)
             conn.Open()
-            ' This SQL also handles associating a UserGuid with an older conversation that might not have one.
             Dim sql = "
                 DECLARE @ConvId INT;
                 SELECT @ConvId = Id FROM Conversations WHERE SessionId = @SessionId;
